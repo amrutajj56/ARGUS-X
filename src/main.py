@@ -76,6 +76,10 @@ def main():
                 "y1",
                 "x2",
                 "y2",
+                "lifecycle_status",
+                "track_age",
+                "hits",
+                "missed_frames",
             ],
         )
         csv_writer.writeheader()
@@ -98,6 +102,10 @@ def main():
                             "track_id": track["track_id"],
                             "class_id": track["class_id"],
                             "class_name": track["class_name"],
+                            "lifecycle_status": track["lifecycle_status"],
+                            "track_age": track["track_age"],
+                            "hits": track["hits"],
+                            "missed_frames": track["missed_frames"],
                             "confidence": round(track["confidence"], 4),
                             "x1": x1,
                             "y1": y1,

@@ -10,3 +10,5 @@ outputs/*
 !outputs/.gitkeep
 *.mp4
 *.avi
+# YOLO model weights
+*.pt
