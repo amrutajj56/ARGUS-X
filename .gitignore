@@ -12,3 +12,12 @@ outputs/*
 *.avi
 # YOLO model weights
 *.pt
+# Generated tracking results
+argus_events.csv
+argus_final_events.csv
+argus_final_events_BACKUP.csv
+argus_person_events.csv
+
+
+src/dataset/__pycache__/
+*.pyc

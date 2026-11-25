@@ -54,6 +54,10 @@ class TrackingEngine:
             for bbox, track_id, confidence, class_id in zip(
                 xyxy_values, id_values, conf_values, cls_values
             ):
+                # ARGUS-X focuses on human tracking.
+                if class_id != 0:
+                    continue
+
                 x1, y1, x2, y2 = [int(value) for value in bbox]
                 class_name = self.model.names.get(class_id, str(class_id))
 

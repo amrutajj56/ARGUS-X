@@ -1,4 +1,5 @@
-"""Run ARGUS-X Member 1 tracking on a video file or webcam."""
+
+"""ARGUS-X: Video and webcam demonstration runner."""
 
 import argparse
 import csv
@@ -6,131 +7,207 @@ from pathlib import Path
 
 import cv2
 
-from src.tracker import TrackingEngine
+from src.recognition import ARGUSXPipeline
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ARGUS-X object tracking demo")
+    parser = argparse.ArgumentParser(
+        description="ARGUS-X multi-object identity tracking"
+    )
+
     parser.add_argument(
         "--source",
-        default="data/test_video.mp4",
-        help="Video path, or 0 for the default webcam",
+        default="data/solutions_ci_demo.mp4",
+        help="Video file path or 0 for webcam",
     )
-    parser.add_argument("--output", default="outputs/tracked_output.mp4")
-    parser.add_argument("--model", default="yolov8n.pt")
-    parser.add_argument("--confidence", type=float, default=0.35)
-    parser.add_argument("--show", action="store_true", help="Display the video window")
+    parser.add_argument(
+        "--output",
+        default="outputs/argusx_output.mp4",
+    )
+    parser.add_argument(
+        "--csv",
+        default="outputs/argusx_tracks.csv",
+    )
+    parser.add_argument(
+        "--model",
+        default="yolov8n.pt",
+    )
+    parser.add_argument(
+        "--confidence",
+        type=float,
+        default=0.35,
+    )
+    parser.add_argument(
+        "--camera-id",
+        default="camera_1",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display the tracking window",
+    )
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
     source = 0 if args.source == "0" else args.source
 
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        raise SystemExit(
-            f"Could not open source: {args.source}\n"
-            "Check the video path, or try --source 0 for a webcam."
+    if isinstance(source, str) and not Path(source).is_file():
+        raise FileNotFoundError(
+            f"Input video not found: {source}"
         )
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if not fps or fps <= 1:
-        fps = 25.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    Path(args.output).parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    Path(args.csv).parent.mkdir(
+        parents=True, exist_ok=True
+    )
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print("\n========== ARGUS-X ==========")
+    print(f"Input source: {args.source}")
+    print(f"Camera ID: {args.camera_id}")
+    print("Loading detection and identity models...")
+
+    pipeline = ARGUSXPipeline(
+        camera_id=args.camera_id,
+        device="cpu",
+        model_path=args.model,
+        confidence=args.confidence,
+    )
+
+    capture = cv2.VideoCapture(source)
+
+    if not capture.isOpened():
+        raise RuntimeError(
+            f"Could not open input source: {args.source}"
+        )
+
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0:
+        fps = 25.0
+
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if width <= 0 or height <= 0:
+        capture.release()
+        raise RuntimeError("Could not read video dimensions.")
+
     writer = cv2.VideoWriter(
-        str(output_path),
+        args.output,
         cv2.VideoWriter_fourcc(*"mp4v"),
         fps,
         (width, height),
     )
-    if not writer.isOpened():
-        cap.release()
-        raise SystemExit(f"Could not create output video: {output_path}")
 
-    csv_path = output_path.with_suffix(".csv")
-    engine = TrackingEngine(
-        model_path=args.model,
-        confidence=args.confidence,
-        device="cpu",
-    )
+    if not writer.isOpened():
+        capture.release()
+        raise RuntimeError(
+            f"Could not create output video: {args.output}"
+        )
+
+    csv_fields = [
+        "frame",
+        "camera_id",
+        "local_track_id",
+        "global_id",
+        "class_name",
+        "confidence",
+        "identity_match_status",
+        "match_similarity",
+        "lifecycle_status",
+        "track_age",
+    ]
 
     frame_number = 0
-    print("ARGUS-X tracking started. First run may download the YOLO nano model.")
-    print("Press Q in the video window to stop when --show is enabled.")
+    total_detections = 0
+    observed_global_ids = set()
 
-    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
-        csv_writer = csv.DictWriter(
-            csv_file,
-            fieldnames=[
-                "frame",
-                "track_id",
-                "class_id",
-                "class_name",
-                "confidence",
-                "x1",
-                "y1",
-                "x2",
-                "y2",
-                "lifecycle_status",
-                "track_age",
-                "hits",
-                "missed_frames",
-            ],
-        )
-        csv_writer.writeheader()
+    print("\nProcessing started. Press Q to stop the display.\n")
 
-        try:
+    try:
+        with open(
+            args.csv,
+            "w",
+            newline="",
+            encoding="utf-8",
+        ) as csv_file:
+
+            csv_writer = csv.DictWriter(
+                csv_file,
+                fieldnames=csv_fields,
+            )
+            csv_writer.writeheader()
+
             while True:
-                ok, frame = cap.read()
-                if not ok:
+                success, frame = capture.read()
+
+                if not success:
                     break
 
-                annotated, tracks = engine.process_frame(frame)
-                writer.write(annotated)
                 frame_number += 1
 
+                annotated, tracks = pipeline.process_frame(frame)
+
+                total_detections += len(tracks)
+
                 for track in tracks:
-                    x1, y1, x2, y2 = track["bbox"]
-                    csv_writer.writerow(
-                        {
-                            "frame": frame_number,
-                            "track_id": track["track_id"],
-                            "class_id": track["class_id"],
-                            "class_name": track["class_name"],
-                            "lifecycle_status": track["lifecycle_status"],
-                            "track_age": track["track_age"],
-                            "hits": track["hits"],
-                            "missed_frames": track["missed_frames"],
-                            "confidence": round(track["confidence"], 4),
-                            "x1": x1,
-                            "y1": y1,
-                            "x2": x2,
-                            "y2": y2,
-                        }
-                    )
+                    global_id = track.get("global_id")
+
+                    if global_id is not None:
+                        observed_global_ids.add(global_id)
+
+                    csv_writer.writerow({
+                        "frame": frame_number,
+                        "camera_id": args.camera_id,
+                        "local_track_id": track.get("track_id"),
+                        "global_id": global_id,
+                        "class_name": track.get("class_name"),
+                        "confidence": track.get("confidence"),
+                        "identity_match_status": track.get(
+                            "identity_match_status"
+                        ),
+                        "match_similarity": track.get(
+                            "match_similarity"
+                        ),
+                        "lifecycle_status": track.get(
+                            "lifecycle_status"
+                        ),
+                        "track_age": track.get("track_age"),
+                    })
+
+                writer.write(annotated)
+
+                if args.show:
+                    cv2.imshow("ARGUS-X Identity Tracking", annotated)
+
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        print("Display stopped by user.")
+                        break
 
                 if frame_number % 30 == 0:
                     print(
-                        f"Processed {frame_number} frames | "
-                        f"visible tracks: {len(tracks)}"
+                        f"Frames: {frame_number} | "
+                        f"Visible tracks: {len(tracks)} | "
+                        f"Global IDs observed: {len(observed_global_ids)}"
                     )
 
-                if args.show:
-                    cv2.imshow("ARGUS-X | Member 1 Tracking Engine", annotated)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
-        finally:
-            cap.release()
-            writer.release()
-            cv2.destroyAllWindows()
+    finally:
+        capture.release()
+        writer.release()
+        cv2.destroyAllWindows()
 
-    print(f"Finished. Annotated video: {output_path}")
-    print(f"Frame-by-frame tracking data: {csv_path}")
+    print("\n========== RESULTS ==========")
+    print(f"Frames processed: {frame_number}")
+    print(f"Total track observations: {total_detections}")
+    print(f"Unique global IDs observed: {len(observed_global_ids)}")
+    print(f"Annotated video: {args.output}")
+    print(f"Tracking CSV: {args.csv}")
+    print("ARGUS-X processing completed.")
 
 
 if __name__ == "__main__":
